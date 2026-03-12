@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Recorder - 录制日志</title>
+  <link rel="stylesheet" href="sidebar.css">
+</head>
+<body>
+  <div id="sidebar">
+    <div class="sidebar-header">
+      <div class="header-content">
+        <h1>🎬 AI Recorder</h1>
+        <span id="recording-status" class="status-badge">
+          <span class="status-dot"></span>
+          <span class="status-text">就绪</span>
+        </span>
+      </div>
+      <button id="close-btn" class="close-btn" title="关闭">×</button>
+    </div>
+
+    <div class="sidebar-content">
+      <!-- 录制信息 -->
+      <div id="recording-info" class="info-panel hidden">
+        <div class="info-item">
+          <span class="info-label">SOP 名称:</span>
+          <span id="current-sop-name" class="info-value">-</span>
+        </div>
+        <div class="info-item">
+          <span class="info-label">已录制:</span>
+          <span id="action-count" class="info-value">0</span>
+          <span class="info-unit">步</span>
+        </div>
+      </div>
+
+      <!-- 录制日志 -->
+      <div class="log-container">
+        <div class="log-header">
+          <h2>📝 实时日志</h2>
+          <button id="clear-log-btn" class="btn-small">清空</button>
+        </div>
+        <div id="recording-log" class="recording-log">
+          <div class="empty-log">
+            <p>暂无录制内容</p>
+            <p class="hint">点击"开始录制"并开始操作</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- 控制按钮 -->
+      <div class="control-panel">
+        <button id="start-btn" class="btn btn-primary">
+          <span class="icon">⏺</span> 开始录制
+        </button>
+        <button id="stop-btn" class="btn btn-danger" disabled>
+          <span class="icon">⏹</span> 停止录制
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="sidebar.js"></script>
+</body>
+</html>

@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Recorder</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Header -->
+    <header class="header">
+      <h1 class="header-title">🎬 AI Recorder</h1>
+      <p class="header-subtitle">录制操作 · 生成 SOP · AI 执行</p>
+    </header>
+
+    <!-- Recording Panel -->
+    <div class="panel">
+      <div id="recording-status" class="status-bar">
+        <span class="status-dot"></span>
+        <span class="status-text">就绪</span>
+      </div>
+      
+      <div class="form-group">
+        <input type="text" id="sop-name" placeholder="输入 SOP 名称..." class="input">
+        <textarea id="sop-description" placeholder="描述（可选）" class="textarea" rows="2"></textarea>
+        
+        <div class="btn-row">
+          <button id="start-btn" class="btn btn-primary">
+            <span>⏺</span> 开始录制
+          </button>
+          <button id="pause-btn" class="btn btn-secondary" disabled>
+            <span>⏸</span> <span class="pause-text">暂停</span>
+          </button>
+          <button id="stop-btn" class="btn btn-danger" disabled>
+            <span>⏹</span> 停止
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- SOP List Panel -->
+    <div id="sop-list-panel" class="panel">
+      <div class="panel-header">
+        <h2>📋 SOP 列表</h2>
+        <span id="sop-count" class="badge">0</span>
+      </div>
+      <div id="sop-list" class="sop-list"></div>
+    </div>
+
+    <!-- SOP Detail Panel -->
+    <div id="sop-detail-panel" class="panel hidden">
+      <div class="panel-header">
+        <button id="back-btn" class="btn-back">← 返回</button>
+        <h2 id="detail-title"></h2>
+      </div>
+      <div id="sop-detail-content"></div>
+    </div>
+  </div>
+
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

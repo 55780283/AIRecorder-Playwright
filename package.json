@@ -1,0 +1,8 @@
+{
+  "name": "ai-recorder",
+  "version": "1.0.0",
+  "description": "Browser extension to record user actions and generate Playwright scripts for AI automation",
+  "scripts": {
+    "clean": "rm -rf dist"
+  }
+}
