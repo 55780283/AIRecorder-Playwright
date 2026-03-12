@@ -29,6 +29,17 @@
 - **Skill 格式** - Trae 可复用的技能文件
 - **Markdown 摘要** - 人类可读的 SOP 文档
 
+### 🧠 AI 智能优化
+导出时自动优化操作流程：
+```
+原始录制 → AI 清洗 → 选择器优化 → 稳定脚本
+```
+- **去除冗余**：移除重复点击、无效滚动
+- **合并操作**：连续输入合并为一次 fill
+- **智能等待**：元素可见后才执行操作
+- **意图识别**：自动识别登录、搜索、提交等意图
+- **选择器优化**：优先使用 data-testid、aria-label 等稳定属性
+
 ### 🔄 SOP 管理
 - 本地存储所有录制的操作流程
 - 支持查看、编辑、删除操作
@@ -63,7 +74,9 @@ AIRecorder/
 │   ├── helpers.js         # 工具函数
 │   ├── selector.js        # 选择器生成
 │   ├── storage.js         # 存储管理
-│   └── playwright-generator.js  # Playwright 脚本生成
+│   ├── playwright-generator.js  # Playwright 脚本生成
+│   ├── ai-optimizer.js    # AI 操作清洗优化
+│   └── selector-optimizer.js    # 选择器优化
 └── icons/
     ├── icon16.png
     ├── icon48.png

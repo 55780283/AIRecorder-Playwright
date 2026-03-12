@@ -3,7 +3,10 @@ import {
   generatePlaywrightScriptForAI,
   generateSOPSummary,
   generateSkill,
+  generateCompleteSkill,
 } from '../utils/playwright-generator.js';
+import { optimizeActions, getOptimizationStats } from '../utils/ai-optimizer.js';
+import { optimizeSelectors } from '../utils/selector-optimizer.js';
 
 class PopupManager {
   constructor() {
@@ -257,14 +260,35 @@ class PopupManager {
 
   exportPlaywright() {
     if (!this.currentSOP) return;
-    const script = generatePlaywrightScriptWithComments(this.currentSOP);
+    
+    const optimizedSOP = this.optimizeSOP(this.currentSOP);
+    const script = generatePlaywrightScriptWithComments(optimizedSOP);
     this.downloadFile(script, `${this.currentSOP.name}.spec.ts`, 'text/typescript');
   }
 
   exportJSON() {
     if (!this.currentSOP) return;
-    const json = generatePlaywrightScriptForAI(this.currentSOP);
+    
+    const optimizedSOP = this.optimizeSOP(this.currentSOP);
+    const json = generatePlaywrightScriptForAI(optimizedSOP);
     this.downloadFile(json, `${this.currentSOP.name}.json`, 'application/json');
+  }
+
+  optimizeSOP(sop) {
+    const originalActions = sop.actions || [];
+    
+    const cleanedActions = optimizeActions(originalActions);
+    
+    const optimizedActions = optimizeSelectors(cleanedActions);
+    
+    const stats = getOptimizationStats(originalActions, optimizedActions);
+    console.log('[Optimizer] Stats:', stats);
+    
+    return {
+      ...sop,
+      actions: optimizedActions,
+      optimizationStats: stats
+    };
   }
 
   exportSummary() {
@@ -275,7 +299,9 @@ class PopupManager {
 
   exportSkill() {
     if (!this.currentSOP) return;
-    const skill = generateSkill(this.currentSOP);
+    
+    const optimizedSOP = this.optimizeSOP(this.currentSOP);
+    const skill = generateCompleteSkill(optimizedSOP);
     const skillName = this.currentSOP.name.toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-|-$/g, '')

@@ -40,9 +40,14 @@ export function generateSkill(sop) {
     .replace(/^-|-$/g, '')
     .slice(0, 30) || 'recorded-action';
 
+  const intents = [...new Set(sop.actions.filter(a => a.intent).map(a => a.intent))];
+  const description = intents.length > 0 
+    ? `Executes ${sop.name} workflow (${intents.join(', ')}). Invoke when user wants to perform this recorded workflow.`
+    : `Executes ${sop.name}. Invoke when user wants to perform this recorded workflow or automate this specific task.`;
+
   lines.push(`---`);
   lines.push(`name: "${skillName}"`);
-  lines.push(`description: "Executes ${sop.name}. Invoke when user wants to perform this recorded workflow or automate this specific task."`);
+  lines.push(`description: "${description}"`);
   lines.push(`---`);
   lines.push('');
   lines.push(`# ${sop.name}`);
@@ -50,6 +55,14 @@ export function generateSkill(sop) {
   
   if (sop.description) {
     lines.push(sop.description);
+    lines.push('');
+  }
+
+  if (sop.optimizationStats) {
+    lines.push(`## Optimization`);
+    lines.push(`- Original steps: ${sop.optimizationStats.originalCount}`);
+    lines.push(`- Optimized steps: ${sop.optimizationStats.optimizedCount}`);
+    lines.push(`- Reduced: ${sop.optimizationStats.removedPercent}%`);
     lines.push('');
   }
 
@@ -77,6 +90,9 @@ export function generateSkill(sop) {
     if (action.value) {
       lines.push(`   - Value: \`${action.value}\``);
     }
+    if (action.intent) {
+      lines.push(`   - Intent: ${action.intent}`);
+    }
     lines.push('');
   }
 
@@ -85,6 +101,126 @@ export function generateSkill(sop) {
   lines.push(`"Please execute the ${sop.name} workflow"`);
   lines.push('');
   lines.push(`"Run the ${skillName} skill"`);
+
+  return lines.join('\n');
+}
+
+export function generateCompleteSkill(sop) {
+  const lines = [];
+
+  const skillName = sop.name.toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 30) || 'recorded-action';
+
+  const intents = [...new Set(sop.actions.filter(a => a.intent).map(a => a.intent))];
+  const description = intents.length > 0 
+    ? `Executes ${sop.name} workflow (${intents.join(', ')}). Invoke when user wants to perform this recorded workflow.`
+    : `Executes ${sop.name}. Invoke when user wants to perform this recorded workflow or automate this specific task.`;
+
+  lines.push(`---`);
+  lines.push(`name: "${skillName}"`);
+  lines.push(`description: "${description}"`);
+  lines.push(`version: "1.0"`);
+  lines.push(`author: "AI Recorder"`);
+  lines.push(`generated: "${new Date().toISOString()}"`);
+  lines.push(`---`);
+  lines.push('');
+  lines.push(`# ${sop.name}`);
+  lines.push('');
+  
+  if (sop.description) {
+    lines.push(sop.description);
+    lines.push('');
+  }
+
+  lines.push(`## Overview`);
+  lines.push('');
+  lines.push(`This skill automates the **${sop.name}** workflow using Playwright.`);
+  lines.push('');
+
+  if (sop.optimizationStats) {
+    lines.push(`### Optimization Stats`);
+    lines.push(`| Metric | Value |`);
+    lines.push(`|--------|-------|`);
+    lines.push(`| Original Steps | ${sop.optimizationStats.originalCount} |`);
+    lines.push(`| Optimized Steps | ${sop.optimizationStats.optimizedCount} |`);
+    lines.push(`| Reduction | ${sop.optimizationStats.removedPercent}% |`);
+    if (intents.length > 0) {
+      lines.push(`| Detected Intents | ${intents.join(', ')} |`);
+    }
+    lines.push('');
+  }
+
+  const parameters = extractParameters(sop);
+  if (parameters.length > 0) {
+    lines.push(`## Parameters`);
+    lines.push('');
+    lines.push('| Parameter | Description | Default |');
+    lines.push('|-----------|-------------|---------|');
+    parameters.forEach(param => {
+      const defaultMatch = param.description.match(/\(default: (.+)\)/);
+      const defaultValue = defaultMatch ? defaultMatch[1] : '-';
+      lines.push(`| \`${param.name}\` | ${param.description.replace(/\(default: .+\)/, '').trim()} | ${defaultValue} |`);
+    });
+    lines.push('');
+  }
+
+  lines.push(`## Workflow Steps`);
+  lines.push('');
+  lines.push('| Step | Action | Description | Selector |');
+  lines.push('|------|--------|-------------|----------|');
+  for (let i = 0; i < sop.actions.length; i++) {
+    const action = sop.actions[i];
+    lines.push(`| ${i + 1} | ${getActionTitle(action.type)} | ${action.description} | \`${action.selector}\` |`);
+  }
+  lines.push('');
+
+  lines.push(`## Playwright Script`);
+  lines.push('');
+  lines.push(`\`\`\`typescript`);
+  const script = generatePlaywrightScriptWithComments(sop);
+  lines.push(script);
+  lines.push(`\`\`\``);
+  lines.push('');
+
+  lines.push(`## JSON Definition`);
+  lines.push('');
+  lines.push(`\`\`\`json`);
+  const json = generatePlaywrightScriptForAI(sop);
+  lines.push(json);
+  lines.push(`\`\`\``);
+  lines.push('');
+
+  lines.push(`## Usage Examples`);
+  lines.push('');
+  lines.push(`### Command Line`);
+  lines.push(`\`\`\`bash`);
+  lines.push(`# Run with Playwright`);
+  lines.push(`npx playwright test ${skillName}.spec.ts`);
+  lines.push(`\`\`\``);
+  lines.push('');
+
+  lines.push(`### AI Assistant`);
+  lines.push(`\`\`\`text`);
+  lines.push(`"Please execute the ${sop.name} workflow"`);
+  lines.push(`"Run the ${skillName} skill"`);
+  lines.push(`"Automate ${sop.name} using the recorded steps"`);
+  lines.push(`\`\`\``);
+  lines.push('');
+
+  lines.push(`## Prerequisites`);
+  lines.push('');
+  lines.push(`- Node.js 18+`);
+  lines.push(`- Playwright installed (\`npm init playwright@latest\`)`);
+  lines.push('');
+
+  lines.push(`## Notes`);
+  lines.push('');
+  lines.push(`- All selectors have been optimized for stability`);
+  lines.push(`- Smart waits are added before element interactions`);
+  lines.push(`- The script waits for elements to be visible before acting`);
+  lines.push('');
 
   return lines.join('\n');
 }
@@ -137,31 +273,31 @@ function getActionTitle(type) {
 function generateActionCode(action, options) {
   const lines = [];
 
-  if (action.waitDuration && action.waitDuration > 100) {
-    lines.push(`await page.waitForTimeout(${action.waitDuration});`);
-  }
-
   switch (action.type) {
     case 'navigation':
       lines.push(`await page.goto('${escapeString(action.url)}');`);
       break;
 
     case 'click':
+      lines.push(`await page.locator('${escapeString(action.selector)}').waitFor({ state: 'visible' });`);
       lines.push(`await page.locator('${escapeString(action.selector)}').click();`);
       break;
 
     case 'dblclick':
+      lines.push(`await page.locator('${escapeString(action.selector)}').waitFor({ state: 'visible' });`);
       lines.push(`await page.locator('${escapeString(action.selector)}').dblclick();`);
       break;
 
     case 'input':
       if (action.value) {
+        lines.push(`await page.locator('${escapeString(action.selector)}').waitFor({ state: 'visible' });`);
         lines.push(`await page.locator('${escapeString(action.selector)}').fill('${escapeString(action.value)}');`);
       }
       break;
 
     case 'select':
       if (action.value) {
+        lines.push(`await page.locator('${escapeString(action.selector)}').waitFor({ state: 'visible' });`);
         lines.push(`await page.locator('${escapeString(action.selector)}').selectOption('${escapeString(action.value)}');`);
       }
       break;
@@ -190,8 +326,12 @@ function generateActionCode(action, options) {
       break;
 
     case 'wait':
-      if (action.waitDuration) {
-        lines.push(`await page.waitForTimeout(${action.waitDuration});`);
+      if (action.selector) {
+        lines.push(`await page.locator('${escapeString(action.selector)}').waitFor({ state: 'visible' });`);
+      } else if (action.waitType === 'networkidle') {
+        lines.push(`await page.waitForLoadState('networkidle');`);
+      } else {
+        lines.push(`await page.waitForLoadState('domcontentloaded');`);
       }
       break;
 
