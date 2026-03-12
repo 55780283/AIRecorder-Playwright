@@ -5,13 +5,13 @@
 ## 截图
 
 ### 录制前
-![录制前](screenshots/录制前.png)
+<img src="screenshots/录制前.png" width="320">
 
 ### 录制中
-![录制中](screenshots/录制中.png)
+<img src="screenshots/录制中.png" width="320">
 
 ### 录制完成
-![录制完成](screenshots/录制完成.png)
+<img src="screenshots/录制完成.png" width="320">
 
 ## 功能特性
 
