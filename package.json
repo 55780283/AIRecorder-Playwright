@@ -5,5 +5,8 @@
   "scripts": {
     "clean": "rm -rf dist",
     "pack": "node scripts/pack.cjs"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.59.1"
   }
 }

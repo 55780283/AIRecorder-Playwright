@@ -128,6 +128,47 @@ function getElementText(element) {
  * 自顶向下：chain[0] 为顶层 iframe，末项为包住当前 document 的直接父 iframe。
  * 供 Playwright 生成 page.locator(...).contentFrame() 链。
  */
+function escapeCssAttributeValue(value) {
+  return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+function isUniqueSelectorInDocument(selector, doc) {
+  try {
+    return doc.querySelectorAll(selector).length === 1;
+  } catch {
+    return false;
+  }
+}
+
+function buildStableFrameSelector(frameElement) {
+  if (!frameElement || frameElement.tagName !== 'IFRAME') return null;
+  const doc = frameElement.ownerDocument || document;
+
+  if (frameElement.id) {
+    const selector = `#${CSS.escape(frameElement.id)}`;
+    if (isUniqueSelectorInDocument(selector, doc)) return selector;
+  }
+
+  const preferredAttributes = [
+    'data-testid',
+    'data-test',
+    'data-cy',
+    'data-automation-id',
+    'title',
+    'aria-label',
+    'name',
+  ];
+
+  for (const attr of preferredAttributes) {
+    const value = frameElement.getAttribute(attr);
+    if (!value) continue;
+    const selector = `iframe[${attr}="${escapeCssAttributeValue(value)}"]`;
+    if (isUniqueSelectorInDocument(selector, doc)) return selector;
+  }
+
+  return null;
+}
+
 function buildFrameChain() {
   if (window === window.top) return undefined;
   const chain = [];
@@ -136,13 +177,18 @@ function buildFrameChain() {
     const el = w.frameElement;
     if (!el) break;
     const parent = el.parentElement;
-    const iframes = parent ? Array.from(parent.querySelectorAll('iframe')) : [];
+    const iframes = parent
+      ? Array.from(parent.children).filter((n) => n.tagName === 'IFRAME')
+      : [];
     const nth = Math.max(0, iframes.indexOf(el));
     const name = el.getAttribute('name') || '';
     const src = el.getAttribute('src') || '';
-    const srcSnippet = src.length > 160 ? src.slice(0, 160) : src;
+    const selector = buildStableFrameSelector(el);
+    const normalizedSrc = normalizeFrameSrcForRecording(src);
+    const srcSnippet = normalizedSrc.length > 160 ? normalizedSrc.slice(0, 160) : normalizedSrc;
     chain.unshift({
       nth,
+      selector: selector || undefined,
       name: name || undefined,
       srcSnippet: srcSnippet || undefined,
     });
@@ -151,11 +197,59 @@ function buildFrameChain() {
   return chain.length ? chain : undefined;
 }
 
+function normalizeFrameSrcForRecording(src) {
+  if (typeof src !== 'string' || !src) return '';
+  try {
+    const url = new URL(src, document.baseURI || window.location.href);
+    return `${url.origin}${url.pathname}`;
+  } catch {
+    return src.split(/[?#]/, 1)[0] || src;
+  }
+}
+
+function accNameFromAriaLabelledBy(element) {
+  const labelledby = element.getAttribute('aria-labelledby');
+  if (!labelledby || !labelledby.trim()) return '';
+  const doc = element.ownerDocument;
+  const parts = labelledby.trim().split(/\s+/).map((id) => {
+    const ref = doc.getElementById(id);
+    return ref ? ref.textContent.replace(/\s+/g, ' ').trim() : '';
+  }).filter(Boolean);
+  return parts.join(' ').trim();
+}
+
+function accNameFromHtmlLabels(element) {
+  if (
+    !(element instanceof HTMLInputElement) &&
+    !(element instanceof HTMLTextAreaElement) &&
+    !(element instanceof HTMLSelectElement)
+  ) {
+    return '';
+  }
+  if (!element.labels || element.labels.length === 0) return '';
+  return Array.from(element.labels)
+    .map((l) => l.textContent.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .join(' ')
+    .trim();
+}
+
+/**
+ * 与可访问名称尽量对齐，供 getByRole / getByText 使用，减少对 nth-child 路径的依赖。
+ */
 function getAccessibleNameForSemantic(element) {
+  const fromLbBy = accNameFromAriaLabelledBy(element);
+  if (fromLbBy) return fromLbBy.slice(0, 120);
+
   const aria = element.getAttribute('aria-label');
   if (aria && aria.trim()) return aria.trim().replace(/\s+/g, ' ').slice(0, 120);
+
+  const fromLabels = accNameFromHtmlLabels(element);
+  if (fromLabels) return fromLabels.slice(0, 120);
+
   const title = element.getAttribute('title');
   if (title && title.trim()) return title.trim().replace(/\s+/g, ' ').slice(0, 120);
+
   if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
     if (element.placeholder) return element.placeholder.trim().slice(0, 120);
   }
@@ -164,6 +258,67 @@ function getAccessibleNameForSemantic(element) {
     if (alt && alt.trim()) return alt.trim().slice(0, 120);
   }
   return getElementText(element).slice(0, 120);
+}
+
+/** 与 playwright-generator 中 imgSrcContainsSelectorString 一致，保证计数与生成代码相同 */
+function escapeFragmentForImgSrcContains(fragment) {
+  return fragment.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+/**
+ * 统计 [src*="fragment"] 能匹配到的 img 数量（与生成器里 locator 字符串一致）。
+ */
+function countImgSrcContains(fragment) {
+  if (!fragment || fragment.length < 5) return 999;
+  try {
+    const esc = escapeFragmentForImgSrcContains(fragment);
+    return document.querySelectorAll(`img[src*="${esc}"]`).length;
+  } catch {
+    return 999;
+  }
+}
+
+/**
+ * 无 alt/aria 时，用 src 上唯一子串生成 img[src*="…"]，避免 div:nth-child > img 路径。
+ */
+function buildImgSrcSemantic(element) {
+  if (!element || element.tagName.toLowerCase() !== 'img') return null;
+  const raw =
+    element.getAttribute('src') ||
+    element.getAttribute('data-src') ||
+    element.getAttribute('data-original') ||
+    '';
+  if (!raw || raw.startsWith('data:')) return null;
+  let abs;
+  try {
+    abs = new URL(raw, document.baseURI || document.location?.href || '').href;
+  } catch {
+    return null;
+  }
+  const candidates = [];
+  try {
+    const u = new URL(abs);
+    const segs = u.pathname.split('/').filter(Boolean);
+    for (let len = Math.min(segs.length, 5); len >= 1; len--) {
+      const slice = segs.slice(-len).join('/');
+      if (slice.length >= 6) candidates.push(slice);
+    }
+    const q = u.search;
+    if (q && q.length >= 6) candidates.push(q);
+    if (u.host && u.host.length >= 6) candidates.push(u.host);
+  } catch {
+    /* ignore */
+  }
+  for (let tailLen = 32; tailLen <= 120; tailLen += 32) {
+    if (abs.length >= tailLen) candidates.push(abs.slice(-tailLen));
+  }
+  const seen = new Set();
+  for (const c of candidates) {
+    if (!c || seen.has(c)) continue;
+    seen.add(c);
+    if (countImgSrcContains(c) === 1) return c;
+  }
+  return null;
 }
 
 /**
@@ -176,6 +331,8 @@ function buildSemanticLocator(element) {
 
   if (tag === 'img' || roleAttr === 'img') {
     if (name) return { kind: 'role', role: 'img', name };
+    const srcFrag = buildImgSrcSemantic(element);
+    if (srcFrag) return { kind: 'imgSrc', srcContains: srcFrag };
     return null;
   }
 
@@ -186,6 +343,21 @@ function buildSemanticLocator(element) {
 
   if (tag === 'input' && (element.type === 'submit' || element.type === 'button')) {
     if (name) return { kind: 'role', role: 'button', name };
+    return null;
+  }
+
+  if (tag === 'input' && element.type === 'checkbox') {
+    if (name) return { kind: 'role', role: 'checkbox', name };
+    return null;
+  }
+
+  if (tag === 'input' && element.type === 'radio') {
+    if (name) return { kind: 'role', role: 'radio', name };
+    return null;
+  }
+
+  if (roleAttr === 'checkbox' || roleAttr === 'radio') {
+    if (name) return { kind: 'role', role: roleAttr, name };
     return null;
   }
 
@@ -207,6 +379,14 @@ function buildSemanticLocator(element) {
   if (tag === 'input' && element.type && !['submit', 'button', 'checkbox', 'radio', 'hidden', 'file', 'image'].includes(element.type)) {
     if (name) return { kind: 'role', role: 'textbox', name };
     return null;
+  }
+
+  if (
+    roleAttr &&
+    name &&
+    ['menuitem', 'tab', 'option', 'switch', 'menuitemcheckbox', 'menuitemradio'].includes(roleAttr)
+  ) {
+    return { kind: 'role', role: roleAttr, name };
   }
 
   if (name && name.length > 0 && name.length <= 80) {
@@ -875,8 +1055,11 @@ class ActionRecorder {
 
     this.pendingInputTimeout = setTimeout(() => {
       if (this.lastInputElement && this.lastInputValue) {
-        this.recordAction('input', this.lastInputElement, {
+        const el = this.lastInputElement;
+        const type = el instanceof HTMLInputElement ? (el.type || '').toLowerCase() : '';
+        this.recordAction('input', el, {
           value: this.lastInputValue,
+          ...(type ? { inputType: type } : {}),
         });
       }
       this.pendingInputTimeout = null;

@@ -273,24 +273,61 @@ function getActionTitle(type) {
   return titles[type] || type.toUpperCase();
 }
 
-function buildTabIdToPageVarMap(actions) {
-  const order = [];
+/**
+ * 按时间顺序收集「点击后通过 window.open / target=_blank 打开」的子 tab（Chrome 会带 openerTabId）。
+ * 只有这些 tab 在 Playwright 里才对应 waitForEvent('popup') 得到的 Page。
+ */
+function collectPopupChildTabIdsInOrder(actions) {
+  const list = [];
   const seen = new Set();
-  for (const a of actions) {
-    const key = a.tabId == null ? '__NONE__' : String(a.tabId);
-    if (!seen.has(key)) {
-      seen.add(key);
-      order.push(a.tabId);
+  for (let i = 0; i < actions.length - 1; i++) {
+    const cur = actions[i];
+    const next = actions[i + 1];
+    if (cur.type !== 'click' && cur.type !== 'dblclick') continue;
+    if (cur.tabId == null || next.tabId == null) continue;
+    if (cur.tabId === next.tabId) continue;
+    if (next.openerTabId !== cur.tabId) continue;
+    const tid = next.tabId;
+    if (!seen.has(tid)) {
+      seen.add(tid);
+      list.push(tid);
     }
   }
-  const map = new Map();
-  if (order.length === 0) {
-    map.set(undefined, 'page');
-    return map;
+  return list;
+}
+
+function allRecordedTabIds(actions) {
+  const s = new Set();
+  for (const a of actions) {
+    if (a.tabId != null) s.add(a.tabId);
   }
-  order.forEach((tid, i) => {
-    map.set(tid, i === 0 ? 'page' : `page${i}`);
+  return s;
+}
+
+/**
+ * 主 tab：录制中第一条带 tabId 的动作所在标签（用户开始录制的页）。
+ * 其余 tab：仅「弹窗子 tab」映射为 page1、page2…；其它（手动切标签等）全部并回 page，避免生成未定义的 pageN。
+ */
+function buildTabIdToPageVarMap(actions) {
+  const map = new Map();
+  map.set(undefined, 'page');
+
+  const primaryTabId = actions.find((a) => a.tabId != null)?.tabId;
+  if (primaryTabId != null) {
+    map.set(primaryTabId, 'page');
+  }
+
+  const popupChildren = collectPopupChildTabIdsInOrder(actions);
+  popupChildren.forEach((tid, i) => {
+    map.set(tid, `page${i + 1}`);
   });
+
+  for (const tid of allRecordedTabIds(actions)) {
+    if (!map.has(tid)) {
+      map.set(tid, 'page');
+    }
+  }
+
   return map;
 }
 
@@ -300,23 +337,39 @@ function pageVarForAction(action, tabIdToVar) {
   return tabIdToVar.get(undefined) || 'page';
 }
 
-function iframeLocatorString(frame) {
+function buildFrameLocator(frame) {
+  if (frame.selector) {
+    return { locator: frame.selector, useNth: false };
+  }
   if (frame.name) {
-    return `iframe[name="${escapeString(frame.name)}"]`;
+    return { locator: `iframe[name="${escapeString(frame.name)}"]`, useNth: false };
   }
   if (frame.srcSnippet) {
-    return `iframe[src*='${escapeString(frame.srcSnippet)}']`;
+    return {
+      locator: `iframe[src*='${escapeString(normalizeIframeSrcSnippet(frame.srcSnippet))}']`,
+      useNth: false,
+    };
   }
-  return 'iframe';
+  return { locator: 'iframe', useNth: true };
+}
+
+function normalizeIframeSrcSnippet(srcSnippet) {
+  if (typeof srcSnippet !== 'string' || !srcSnippet) return '';
+  try {
+    const url = new URL(srcSnippet);
+    return `${url.origin}${url.pathname}` || srcSnippet;
+  } catch {
+    return srcSnippet.split(/[?#]/, 1)[0] || srcSnippet;
+  }
 }
 
 function applyFrameChain(baseExpr, frameChain) {
   if (!frameChain || frameChain.length === 0) return baseExpr;
   let s = baseExpr;
   for (const f of frameChain) {
-    const loc = iframeLocatorString(f);
-    const nth = f.nth > 0 ? `.nth(${f.nth})` : '';
-    s = `${s}.locator(${JSON.stringify(loc)})${nth}.contentFrame()`;
+    const { locator, useNth } = buildFrameLocator(f);
+    const nth = useNth && f.nth > 0 ? `.nth(${f.nth})` : '';
+    s = `${s}.locator(${JSON.stringify(locator)})${nth}.contentFrame()`;
   }
   return s;
 }
@@ -337,7 +390,7 @@ function findPopupWrapByClickIndex(actions, tabIdToVar) {
     if (next.openerTabId !== cur.tabId) continue;
     const openerVar = tabIdToVar.get(cur.tabId) || 'page';
     const newVar = tabIdToVar.get(next.tabId);
-    if (!newVar || newVar === openerVar) continue;
+    if (!newVar || newVar === openerVar || newVar === 'page') continue;
     map.set(i, { openerVar, newVar });
   }
   return map;
@@ -384,8 +437,26 @@ function emitCssInteractionLines(baseExpr, action, verb) {
   ];
 }
 
+/** 与 content 脚本中 [src*="…"] 拼接方式一致（供 locator 字符串 JSON.stringify） */
+function imgSrcContainsSelectorString(srcContains) {
+  if (typeof srcContains !== 'string' || !srcContains) return 'img';
+  const frag = srcContains.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  return `img[src*="${frag}"]`;
+}
+
 function emitSemanticClickLines(baseExpr, action, verb) {
   const sem = action.semantic;
+  if (sem && sem.kind === 'imgSrc' && sem.srcContains) {
+    const selLit = JSON.stringify(imgSrcContainsSelectorString(sem.srcContains));
+    const hasFrame = action.frameChain && action.frameChain.length > 0;
+    if (hasFrame) {
+      return [`await ${baseExpr}.locator(${selLit}).first().${verb}();`];
+    }
+    // 录制若在顶层落盘但图片实际在 iframe 内，主 page 上 locator(img) 会超时；先进入首个 iframe 再点图
+    return [
+      `await ${baseExpr}.locator('iframe').first().contentFrame()!.locator(${selLit}).first().${verb}();`,
+    ];
+  }
   if (sem && sem.kind === 'role' && sem.role) {
     if ((sem.name == null || sem.name === '') && sem.role !== 'img') {
       return emitCssInteractionLines(baseExpr, action, verb);
@@ -401,6 +472,17 @@ function emitSemanticClickLines(baseExpr, action, verb) {
   return emitCssInteractionLines(baseExpr, action, verb);
 }
 
+function emitCssCheckLines(baseExpr, action) {
+  if (!action.selector) {
+    return [`// ${action.description || 'missing selector'}`];
+  }
+  const selLit = JSON.stringify(action.selector);
+  return [
+    `await ${baseExpr}.locator(${selLit}).waitFor({ state: 'visible' });`,
+    `await ${baseExpr}.locator(${selLit}).check();`,
+  ];
+}
+
 function emitSemanticFillLines(baseExpr, action) {
   const sem = action.semantic;
   if (sem && sem.kind === 'role' && sem.role === 'textbox' && sem.name) {
@@ -408,6 +490,20 @@ function emitSemanticFillLines(baseExpr, action) {
     return [
       `await ${baseExpr}.getByRole('textbox', ${opts}).fill('${escapeString(action.value)}');`,
     ];
+  }
+  if (sem && sem.kind === 'role' && sem.role === 'radio' && sem.name) {
+    const opts = buildRoleOptionsStr(sem);
+    return [`await ${baseExpr}.getByRole('radio', ${opts}).check();`];
+  }
+  if (sem && sem.kind === 'role' && sem.role === 'checkbox' && sem.name) {
+    const opts = buildRoleOptionsStr(sem);
+    return [`await ${baseExpr}.getByRole('checkbox', ${opts}).check();`];
+  }
+  const desc = typeof action.description === 'string' ? action.description : '';
+  const looksRadio = action.inputType === 'radio' || /\bradio\b/i.test(desc);
+  const looksCheckbox = action.inputType === 'checkbox' || /\bcheckbox\b/i.test(desc);
+  if (looksRadio || looksCheckbox) {
+    return emitCssCheckLines(baseExpr, action);
   }
   return emitCssInteractionLines(baseExpr, action, 'fill');
 }
@@ -441,6 +537,10 @@ function generateActionCode(action, options, ctx, actionIndex) {
 
   switch (action.type) {
     case 'navigation': {
+      if (action.frameChain && action.frameChain.length > 0) {
+        lines.push(`// Skip iframe navigation to ${escapeString(action.url)}; replay should wait for the host page to load the frame content.`);
+        break;
+      }
       const pv = pageVarForAction(action, tabIdToVar);
       lines.push(`await ${pv}.goto('${escapeString(action.url)}');`);
       break;
@@ -518,6 +618,13 @@ function escapeString(str) {
   return str.replace(/\\/g, '\\\\').replace(/'/g, "\\'").replace(/\n/g, '\\n');
 }
 
+/** 若录制跨多个标签且非全是弹窗打开，在注释里提示回放限制 */
+function multiTabReplayNoteLine(actions) {
+  const ids = allRecordedTabIds(actions);
+  if (ids.size <= 1) return null;
+  return ' * NOTE: 录制跨多个浏览器标签；除弹窗新页对应 page1+ 外，其余已映射到 page 顺序重放。若与实机不符请单标签重录或手写 context。';
+}
+
 export function generatePlaywrightScriptWithComments(sop, options = {}) {
   const opts = { ...DEFAULT_OPTIONS, ...options };
   const lines = [];
@@ -531,6 +638,10 @@ export function generatePlaywrightScriptWithComments(sop, options = {}) {
   }
   lines.push(` * Generated: ${new Date().toISOString()}`);
   lines.push(` * Total Steps: ${sop.actions.length}`);
+  const tabNote = multiTabReplayNoteLine(sop.actions || []);
+  if (tabNote) {
+    lines.push(tabNote);
+  }
   lines.push(` */`);
   lines.push('');
   lines.push(`test.describe('${escapeString(sop.name)}', () => {`);
@@ -572,6 +683,7 @@ export function generatePlaywrightScriptForAI(sop) {
     if (action.keyInfo) result.key = action.keyInfo.key;
     if (action.scrollPosition) result.scrollTo = action.scrollPosition;
     if (action.waitDuration) result.waitMs = action.waitDuration;
+    if (action.inputType) result.inputType = action.inputType;
     if (action.tabId != null) result.tabId = action.tabId;
     if (action.openerTabId != null) result.openerTabId = action.openerTabId;
     if (action.frameChain) result.frameChain = action.frameChain;
