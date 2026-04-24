@@ -32,7 +32,8 @@ export function optimizeSelector(selector, element) {
   const alternatives = generateAlternativeSelectors(selector, element);
   
   if (alternatives.length > 0) {
-    return alternatives[0];
+    // 从候选中选择评分最高的
+    return selectBestSelector(alternatives) || alternatives[0];
   }
   
   return selector;
@@ -65,6 +66,13 @@ function isStableSelector(selector) {
 function generateAlternativeSelectors(selector, element) {
   const alternatives = [];
   
+  // ID 优先级最高
+  const idMatch = selector.match(/#([a-zA-Z][a-zA-Z0-9_-]*)/);
+  if (idMatch) {
+    alternatives.push(`#${idMatch[1]}`);
+  }
+  
+  // 属性选择器
   const attrMatch = selector.match(/\[([a-zA-Z-]+)="([^"]+)"\]/);
   if (attrMatch) {
     const [, attr, value] = attrMatch;
@@ -73,21 +81,28 @@ function generateAlternativeSelectors(selector, element) {
     }
   }
   
-  const idMatch = selector.match(/#([a-zA-Z][a-zA-Z0-9_-]*)/);
-  if (idMatch) {
-    alternatives.push(`#${idMatch[1]}`);
-  }
-  
+  // 从原有选择器提取已有的文本
   const textMatch = selector.match(/:has-text\("([^"]+)"\)/);
   if (textMatch) {
+    alternatives.push(`:has-text("${textMatch[1]}")`);
     alternatives.push(`:text("${textMatch[1]}")`);
   }
   
-  if (selector.includes('button')) {
+  // 对于按钮，优先使用文本选择器 - 这比 nth-child 稳定多了
+  if (selector.includes('button') || selector.toLowerCase().includes('span')) {
     const buttonText = extractButtonText(selector);
-    if (buttonText) {
-      alternatives.push(`button:has-text("${buttonText}")`);
-      alternatives.push(`button:text("${buttonText}")`);
+    if (buttonText && buttonText.trim().length > 0) {
+      alternatives.push(`:has-text("${buttonText.trim()}")`);
+      alternatives.push(`:text("${buttonText.trim()}")`);
+    }
+  }
+  
+  // 对于链接，同样优先文本选择器
+  if (selector.includes('a') || selector.includes('link')) {
+    const linkText = extractLinkText(selector);
+    if (linkText && linkText.trim().length > 0) {
+      alternatives.push(`a:has-text("${linkText.trim()}")`);
+      alternatives.push(`:has-text("${linkText.trim()}")`);
     }
   }
   
@@ -100,13 +115,6 @@ function generateAlternativeSelectors(selector, element) {
     }
     if (inputPlaceholder) {
       alternatives.push(`[placeholder="${inputPlaceholder}"]`);
-    }
-  }
-  
-  if (selector.includes('a[') || selector.includes('a.')) {
-    const linkText = extractLinkText(selector);
-    if (linkText) {
-      alternatives.push(`a:has-text("${linkText}")`);
     }
   }
   

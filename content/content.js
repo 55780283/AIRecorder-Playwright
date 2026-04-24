@@ -124,27 +124,76 @@ function getElementText(element) {
   return text.replace(/\s+/g, ' ').slice(0, 50);
 }
 
+function isExtensionElement(element) {
+  // 检查 ID 是否以 ai-recorder- 开头（都是扩展自身 UI）
+  if (element.id && element.id.startsWith('ai-recorder-')) {
+    return true;
+  }
+  // 检查父级，避免子元素也被误录
+  let parent = element.parentElement;
+  while (parent) {
+    if (parent.id && parent.id.startsWith('ai-recorder-')) {
+      return true;
+    }
+    parent = parent.parentElement;
+  }
+  return false;
+}
+
 function isInteractiveElement(element) {
-  const interactiveTags = ['a', 'button', 'input', 'select', 'textarea', 'option'];
+  // 过滤掉扩展自身的 UI 元素（录制指示器、按钮等）
+  if (isExtensionElement(element)) {
+    return false;
+  }
+
   const tagName = element.tagName.toLowerCase();
 
-  if (interactiveTags.includes(tagName)) {
+  // 基础可交互标签
+  if (['a', 'button', 'input', 'select', 'textarea', 'option'].includes(tagName)) {
     return true;
   }
 
+  // 检查 role
   if (element.getAttribute('role')) {
-    const interactiveRoles = ['button', 'link', 'checkbox', 'radio', 'tab', 'menuitem'];
+    const interactiveRoles = [
+      'button', 'link', 'checkbox', 'radio', 'tab', 'menuitem', 
+      'dialog', 'modal', 'close', 'overlay'
+    ];
     if (interactiveRoles.includes(element.getAttribute('role') || '')) {
       return true;
     }
   }
 
-  if (element.getAttribute('onclick') || element.getAttribute('ng-click')) {
+  // 检查各种点击绑定
+  if (element.getAttribute('onclick') || 
+      element.getAttribute('ng-click') ||
+      element.getAttribute('data-click') ||
+      element.getAttribute('@click')) {
     return true;
   }
 
+  // 检查 cursor: pointer - 可点击元素通常都是这个
   const style = window.getComputedStyle(element);
   if (style.cursor === 'pointer') {
+    return true;
+  }
+
+  // 检查类名是否包含 btn/button/close 等关键字，弹框关闭按钮常用
+  if (element.classList) {
+    const classStr = element.classList.toString().toLowerCase();
+    if (classStr.includes('btn') || 
+        classStr.includes('button') || 
+        classStr.includes('close') ||
+        classStr.includes('cancel') ||
+        classStr.includes('overlay') ||
+        classStr.includes('mask')) {
+      return true;
+    }
+  }
+
+  // 检查 ID 是否包含关闭/按钮关键字
+  const id = (element.id || '').toLowerCase();
+  if (id.includes('close') || id.includes('btn') || id.includes('button')) {
     return true;
   }
 
@@ -673,8 +722,21 @@ class ActionRecorder {
 
   handleClick(event) {
     if (!this.isRecording) return;
-    const target = event.target;
-    if (!isInteractiveElement(target)) return;
+    let target = event.target;
+    
+    // 如果当前元素不 interactive，向上找父级直到找到 interactive 元素（弹框常见场景）
+    let foundInteractive = false;
+    let current = target;
+    while (current && current !== document.body && current !== null) {
+      if (isInteractiveElement(current)) {
+        target = current;
+        foundInteractive = true;
+        break;
+      }
+      current = current.parentElement;
+    }
+    
+    if (!foundInteractive) return;
 
     this.recordAction('click', target, {
       coordinates: { x: event.clientX, y: event.clientY },

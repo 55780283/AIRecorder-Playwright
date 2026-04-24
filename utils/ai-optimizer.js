@@ -22,10 +22,19 @@ function removeDuplicateActions(actions) {
     const current = actions[i];
     const next = actions[i + 1];
     
+    // 处理连续相同 URL 的导航（SPA 路由跳转可能触发多次）
+    if (next && 
+        current.type === 'navigation' && 
+        next.type === 'navigation' &&
+        current.url === next.url) {
+      // 保留最后一次导航，跳过前面重复的
+      continue;
+    }
+    
+    // 处理其他类型的重复操作
     if (next && 
         current.type === next.type && 
         current.selector === next.selector &&
-        current.type !== 'navigation' &&
         current.type !== 'scroll') {
       const timeDiff = (next.timestamp || 0) - (current.timestamp || 0);
       if (timeDiff < ACTION_MERGE_THRESHOLD_MS) {
@@ -100,14 +109,26 @@ function addSmartWaits(actions) {
   for (let i = 0; i < actions.length; i++) {
     const current = actions[i];
     const prev = actions[i - 1];
+    const next = actions[i + 1];
     
-    if (current.type === 'navigation' && prev && prev.type !== 'navigation') {
+    // 只在连续导航的最后一个导航后添加等待，避免每个导航都加
+    if (current.type === 'navigation' && (!next || next.type !== 'navigation') && (!prev || prev.type !== 'navigation')) {
       result.push({
         type: 'wait',
         waitType: 'networkidle',
         description: 'Wait for page load',
         timestamp: current.timestamp
       });
+    } else if (current.type === 'navigation' && next && next.type !== 'navigation') {
+      // 当前是导航，下一个不是导航，说明是连续导航的最后一个
+      result.push(current);
+      result.push({
+        type: 'wait',
+        waitType: 'networkidle',
+        description: 'Wait for page load',
+        timestamp: current.timestamp
+      });
+      continue;
     }
     
     if (current.type === 'click' && 
