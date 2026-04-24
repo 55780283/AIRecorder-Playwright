@@ -92,6 +92,16 @@ class BackgroundService {
     });
   }
 
+  enrichActionWithTabContext(action, sender) {
+    if (!action || typeof action !== 'object') return;
+    if (sender?.tab?.id != null) {
+      action.tabId = sender.tab.id;
+      if (sender.tab.openerTabId != null) {
+        action.openerTabId = sender.tab.openerTabId;
+      }
+    }
+  }
+
   async handleMessage(message, sender, sendResponse) {
     try {
       switch (message.type) {
@@ -121,7 +131,7 @@ class BackgroundService {
           break;
 
         case 'RECORD_ACTION':
-          await this.recordAction(message.action);
+          await this.recordAction(message.action, sender);
           sendResponse({ success: true });
           break;
 
@@ -233,11 +243,26 @@ class BackgroundService {
     console.log('[Background] 录制已恢复');
   }
 
-  async recordAction(action) {
+  async recordAction(action, sender) {
     if (this.currentSession) {
+      this.enrichActionWithTabContext(action, sender);
       this.currentSession.actions.push(action);
       await storage.addActionToSOP(this.currentSession.sopId, action);
       console.log('[Background] 记录操作:', action.type, '当前操作数量:', this.currentSession.actions.length);
+
+      // 录制 UI 只挂在顶层 document；iframe 内录制的步骤需通知主 frame 刷新列表
+      const tabId = sender?.tab?.id;
+      if (tabId != null) {
+        try {
+          await chrome.tabs.sendMessage(
+            tabId,
+            { type: 'APPEND_RECORDING_LOG', action },
+            { frameId: 0 }
+          );
+        } catch (_e) {
+          // 主 frame 未注入或暂不可达
+        }
+      }
     } else {
       console.warn('[Background] 录制未开始，无法记录操作');
     }

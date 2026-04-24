@@ -15,6 +15,14 @@ export function optimizeActions(actions) {
   return optimized;
 }
 
+function sameActionContext(a, b) {
+  if ((a.tabId ?? null) !== (b.tabId ?? null)) return false;
+  const fa = JSON.stringify(a.frameChain || []);
+  const fb = JSON.stringify(b.frameChain || []);
+  if (fa !== fb) return false;
+  return true;
+}
+
 function removeDuplicateActions(actions) {
   const result = [];
   
@@ -26,7 +34,8 @@ function removeDuplicateActions(actions) {
     if (next && 
         current.type === 'navigation' && 
         next.type === 'navigation' &&
-        current.url === next.url) {
+        current.url === next.url &&
+        sameActionContext(current, next)) {
       // 保留最后一次导航，跳过前面重复的
       continue;
     }
@@ -35,7 +44,8 @@ function removeDuplicateActions(actions) {
     if (next && 
         current.type === next.type && 
         current.selector === next.selector &&
-        current.type !== 'scroll') {
+        current.type !== 'scroll' &&
+        sameActionContext(current, next)) {
       const timeDiff = (next.timestamp || 0) - (current.timestamp || 0);
       if (timeDiff < ACTION_MERGE_THRESHOLD_MS) {
         continue;
@@ -56,6 +66,7 @@ function mergeConsecutiveInputs(actions) {
     if (action.type === 'input') {
       if (currentInput && 
           currentInput.selector === action.selector &&
+          sameActionContext(currentInput, action) &&
           (action.timestamp || 0) - (currentInput.timestamp || 0) < INPUT_MERGE_THRESHOLD_MS) {
         currentInput = {
           ...action,
@@ -117,7 +128,8 @@ function addSmartWaits(actions) {
         type: 'wait',
         waitType: 'networkidle',
         description: 'Wait for page load',
-        timestamp: current.timestamp
+        timestamp: current.timestamp,
+        tabId: current.tabId,
       });
     } else if (current.type === 'navigation' && next && next.type !== 'navigation') {
       // 当前是导航，下一个不是导航，说明是连续导航的最后一个
@@ -126,7 +138,8 @@ function addSmartWaits(actions) {
         type: 'wait',
         waitType: 'networkidle',
         description: 'Wait for page load',
-        timestamp: current.timestamp
+        timestamp: current.timestamp,
+        tabId: current.tabId,
       });
       continue;
     }
@@ -139,7 +152,8 @@ function addSmartWaits(actions) {
         type: 'wait',
         waitType: 'networkidle',
         description: 'Wait for form submission',
-        timestamp: current.timestamp + 100
+        timestamp: current.timestamp + 100,
+        tabId: current.tabId,
       });
       continue;
     }

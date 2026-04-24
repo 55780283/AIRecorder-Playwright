@@ -124,6 +124,105 @@ function getElementText(element) {
   return text.replace(/\s+/g, ' ').slice(0, 50);
 }
 
+/**
+ * 自顶向下：chain[0] 为顶层 iframe，末项为包住当前 document 的直接父 iframe。
+ * 供 Playwright 生成 page.locator(...).contentFrame() 链。
+ */
+function buildFrameChain() {
+  if (window === window.top) return undefined;
+  const chain = [];
+  let w = window;
+  while (w !== w.top) {
+    const el = w.frameElement;
+    if (!el) break;
+    const parent = el.parentElement;
+    const iframes = parent ? Array.from(parent.querySelectorAll('iframe')) : [];
+    const nth = Math.max(0, iframes.indexOf(el));
+    const name = el.getAttribute('name') || '';
+    const src = el.getAttribute('src') || '';
+    const srcSnippet = src.length > 160 ? src.slice(0, 160) : src;
+    chain.unshift({
+      nth,
+      name: name || undefined,
+      srcSnippet: srcSnippet || undefined,
+    });
+    w = w.parent;
+  }
+  return chain.length ? chain : undefined;
+}
+
+function getAccessibleNameForSemantic(element) {
+  const aria = element.getAttribute('aria-label');
+  if (aria && aria.trim()) return aria.trim().replace(/\s+/g, ' ').slice(0, 120);
+  const title = element.getAttribute('title');
+  if (title && title.trim()) return title.trim().replace(/\s+/g, ' ').slice(0, 120);
+  if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+    if (element.placeholder) return element.placeholder.trim().slice(0, 120);
+  }
+  if (element.tagName && element.tagName.toLowerCase() === 'img') {
+    const alt = element.getAttribute('alt');
+    if (alt && alt.trim()) return alt.trim().slice(0, 120);
+  }
+  return getElementText(element).slice(0, 120);
+}
+
+/**
+ * 与 Playwright codegen 对齐的语义定位提示（生成器优先使用）。
+ */
+function buildSemanticLocator(element) {
+  const tag = element.tagName.toLowerCase();
+  const roleAttr = (element.getAttribute('role') || '').toLowerCase();
+  const name = getAccessibleNameForSemantic(element);
+
+  if (tag === 'img' || roleAttr === 'img') {
+    if (name) return { kind: 'role', role: 'img', name };
+    return null;
+  }
+
+  if (tag === 'button' || roleAttr === 'button') {
+    if (name) return { kind: 'role', role: 'button', name };
+    return null;
+  }
+
+  if (tag === 'input' && (element.type === 'submit' || element.type === 'button')) {
+    if (name) return { kind: 'role', role: 'button', name };
+    return null;
+  }
+
+  if ((tag === 'a' && element.getAttribute('href')) || roleAttr === 'link') {
+    if (name) return { kind: 'role', role: 'link', name };
+    return null;
+  }
+
+  if (tag === 'select' || roleAttr === 'combobox') {
+    if (name) return { kind: 'role', role: 'combobox', name };
+    return null;
+  }
+
+  if (tag === 'textarea' || roleAttr === 'textbox') {
+    if (name) return { kind: 'role', role: 'textbox', name };
+    return null;
+  }
+
+  if (tag === 'input' && element.type && !['submit', 'button', 'checkbox', 'radio', 'hidden', 'file', 'image'].includes(element.type)) {
+    if (name) return { kind: 'role', role: 'textbox', name };
+    return null;
+  }
+
+  if (name && name.length > 0 && name.length <= 80) {
+    const short = name.length <= 8;
+    const useFirst = ['span', 'div', 'li', 'p', 'label'].includes(tag);
+    return {
+      kind: 'text',
+      text: name,
+      exact: short,
+      first: useFirst,
+    };
+  }
+
+  return null;
+}
+
 function isExtensionElement(element) {
   // 检查 ID 是否以 ai-recorder- 开头（都是扩展自身 UI）
   if (element.id && element.id.startsWith('ai-recorder-')) {
@@ -237,6 +336,11 @@ class ActionRecorder {
         sendResponse({ success: true });
       } else if (message.type === 'GET_RECORDING_STATE') {
         sendResponse({ isRecording: this.isRecording, isPaused: this.isPaused });
+      } else if (message.type === 'APPEND_RECORDING_LOG' && message.action) {
+        if (window === window.top) {
+          this.updateRecordingLog(message.action);
+        }
+        sendResponse({ success: true });
       }
       return true;
     });
@@ -434,6 +538,9 @@ class ActionRecorder {
   }
 
   showRecordingIndicator() {
+    if (window !== window.top) {
+      return;
+    }
     const existingIndicator = document.getElementById('ai-recorder-indicator');
     if (existingIndicator) {
       return;
@@ -673,6 +780,8 @@ class ActionRecorder {
 
     const selector = generateSelector(element);
     const description = getElementDescription(element, type);
+    const frameChain = buildFrameChain();
+    const semantic = buildSemanticLocator(element);
 
     const action = {
       id: generateId(),
@@ -684,6 +793,8 @@ class ActionRecorder {
       pageTitle: document.title,
       description,
       waitDuration: waitDuration > 100 ? waitDuration : undefined,
+      ...(frameChain ? { frameChain } : {}),
+      ...(semantic ? { semantic } : {}),
       ...options,
     };
 
@@ -692,14 +803,13 @@ class ActionRecorder {
       type: 'RECORD_ACTION',
       action,
     });
-    
-    this.updateRecordingLog(action);
   }
 
   recordNavigation() {
     if (!this.isRecording) return;
     if (this.isPaused) return;
 
+    const frameChain = buildFrameChain();
     const action = {
       id: generateId(),
       type: 'navigation',
@@ -709,15 +819,13 @@ class ActionRecorder {
       url: window.location.href,
       pageTitle: document.title,
       description: `Navigate to ${window.location.href}`,
+      ...(frameChain ? { frameChain } : {}),
     };
 
     chrome.runtime.sendMessage({
       type: 'RECORD_ACTION',
       action,
     });
-    
-    // 更新页面上的日志面板
-    this.updateRecordingLog(action);
   }
 
   handleClick(event) {
